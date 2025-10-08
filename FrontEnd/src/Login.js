@@ -1,52 +1,89 @@
-// FrontEnd/src/Login.js
-import React, { useState } from 'react';
-import { View, Text, TextInput, Button, Alert, StyleSheet, TouchableOpacity } from 'react-native';
-import { login as loginApi } from './services/api';   // ใช้ alias กันชนชื่อ
+import React, { useState } from "react";
+import { View, Text, TextInput, Button, StyleSheet, Alert } from "react-native";
+import { Picker } from "@react-native-picker/picker";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { register, setAuthToken } from "./services/api";
 
-export default function Login({ navigation }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+export default function Register({ navigation }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [weight, setWeight] = useState("");
+  const [height, setHeight] = useState("");
+  const [age, setAge] = useState("");
+  const [exercise, setExercise] = useState("low");
+  const [goal, setGoal] = useState("maintain");
   const [loading, setLoading] = useState(false);
 
-  async function onLogin() {
+  const handleRegister = async () => {
+    if (!email || !password) return Alert.alert("Error", "ใส่อีเมลและรหัสผ่าน");
     try {
-      if (!email || !password) return Alert.alert('กรุณากรอกอีเมลและรหัสผ่าน');
       setLoading(true);
-      await loginApi({ email: email.trim().toLowerCase(), password: password.trim() });
-      navigation.navigate('Home');
-      
-    } catch (e) {
-      Alert.alert('Login Error', e?.response?.data?.error || e.message);
+
+      const res = await register({
+        email: email.trim().toLowerCase(),
+        password,
+        displayName: name,
+        weight: weight ? parseFloat(weight) : null,
+        height: height ? parseFloat(height) : null,
+        age:    age ? parseInt(age, 10) : null,
+        exercise,
+        goal,
+      });
+
+      const user  = res?.user || res?.data?.user || null;
+      const token = res?.accessToken || res?.data?.accessToken || res?.token || null;
+      if (!token) throw new Error("missing accessToken from register API");
+
+      await AsyncStorage.setItem("accessToken", token);
+      setAuthToken(token);
+
+      const userId = user?.id ?? user?.UserID ?? null;
+      if (userId) await AsyncStorage.setItem("userId", String(userId));
+      await AsyncStorage.setItem("userEmail", (user?.email ?? email).trim().toLowerCase());
+
+      Alert.alert("สำเร็จ", "สมัครเรียบร้อย");
+      navigation.reset({ index: 0, routes: [{ name: "Home" }] });
+    } catch (err) {
+      console.error("[Register] error:", err);
+      Alert.alert("Register Error", err?.response?.data?.error ?? err.message);
     } finally {
       setLoading(false);
     }
-  }
+  };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Login</Text>
+      <Text style={styles.title}>Register</Text>
+      <TextInput style={styles.input} placeholder="Name" value={name} onChangeText={setName} />
+      <TextInput style={styles.input} placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
+      <TextInput style={styles.input} placeholder="Password" value={password} onChangeText={setPassword} secureTextEntry />
+      <TextInput style={styles.input} placeholder="Weight (kg)" value={weight} onChangeText={setWeight} keyboardType="numeric" />
+      <TextInput style={styles.input} placeholder="Height (cm)" value={height} onChangeText={setHeight} keyboardType="numeric" />
+      <TextInput style={styles.input} placeholder="Age" value={age} onChangeText={setAge} keyboardType="numeric" />
 
-      <Text style={styles.label}>Email</Text>
-      <TextInput value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" style={styles.input} />
+      <Text>Exercise</Text>
+      <Picker selectedValue={exercise} onValueChange={setExercise}>
+        <Picker.Item label="น้อย" value="low" />
+        <Picker.Item label="ปานกลาง" value="medium" />
+        <Picker.Item label="มาก" value="high" />
+      </Picker>
 
-      <Text style={styles.label}>Password</Text>
-      <TextInput value={password} onChangeText={setPassword} secureTextEntry style={styles.input} />
+      <Text>Goal</Text>
+      <Picker selectedValue={goal} onValueChange={setGoal}>
+        <Picker.Item label="รักษาน้ำหนัก" value="maintain" />
+        <Picker.Item label="ลดน้ำหนัก" value="lose" />
+        <Picker.Item label="เพิ่มกล้าม" value="gain" />
+      </Picker>
 
-      <View style={{ height: 12 }} />
-      <Button title={loading ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'} onPress={onLogin} disabled={loading} />
-
-      <View style={{ height: 16 }} />
-      <TouchableOpacity onPress={() => navigation.navigate('Register')}>
-        <Text style={styles.link}>ยังไม่มีบัญชี? สมัครสมาชิก</Text>
-      </TouchableOpacity>
+      <Button title={loading ? "กำลังสมัคร..." : "Register"} onPress={handleRegister} disabled={loading} />
+      <Button title="Go to Login" onPress={() => navigation.navigate("Login")} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, justifyContent: 'center' },
-  title: { fontSize: 24, fontWeight: '700', marginBottom: 16, textAlign: 'center' },
-  label: { marginTop: 8, marginBottom: 4, color: '#333' },
-  input: { borderWidth: 1, borderColor: '#ccc', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
-  link: { color: '#0a84ff', textAlign: 'center' },
+  container:{flex:1, padding:20, justifyContent:"center"},
+  title:{fontSize:20, textAlign:"center", marginBottom:10},
+  input:{borderWidth:1, borderColor:"#ccc", padding:8, marginBottom:8, borderRadius:6}
 });
