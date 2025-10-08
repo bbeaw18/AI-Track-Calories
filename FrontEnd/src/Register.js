@@ -1,4 +1,3 @@
-// src/Register.js
 import React, { useState } from "react";
 import { View, Text, TextInput, Button, StyleSheet, Alert } from "react-native";
 import { Picker } from "@react-native-picker/picker";
@@ -14,16 +13,17 @@ export default function Register({ navigation }) {
   const [age, setAge] = useState("");
   const [exercise, setExercise] = useState("low");
   const [goal, setGoal] = useState("maintain");
+  const [loading, setLoading] = useState(false);
 
   const handleRegister = async () => {
     if (!email || !password) return Alert.alert("Error", "ใส่อีเมลและรหัสผ่าน");
-
     try {
-      // เรียก API backend
-      const { user, accessToken } = await register({
-        email: email.trim(),
+      setLoading(true);
+
+      const res = await register({
+        email: email.trim().toLowerCase(),
         password,
-        displayName: name,           // เก็บชื่อใน displayName
+        displayName: name,
         weight: weight ? parseFloat(weight) : null,
         height: height ? parseFloat(height) : null,
         age:    age ? parseInt(age, 10) : null,
@@ -31,18 +31,24 @@ export default function Register({ navigation }) {
         goal,
       });
 
-      // ✅ เก็บ token + ตั้ง Authorization header ให้ axios
-      await AsyncStorage.setItem("accessToken", accessToken);
-      setAuthToken(accessToken);
-      navigation.reset({ index: 0, routes: [{ name: "Home" }] });
+      const user  = res?.user || res?.data?.user || null;
+      const token = res?.accessToken || res?.data?.accessToken || res?.token || null;
+      if (!token) throw new Error("missing accessToken from register API");
 
+      await AsyncStorage.setItem("accessToken", token);
+      setAuthToken(token);
+
+      const userId = user?.id ?? user?.UserID ?? null;
+      if (userId) await AsyncStorage.setItem("userId", String(userId));
+      await AsyncStorage.setItem("userEmail", (user?.email ?? email).trim().toLowerCase());
 
       Alert.alert("สำเร็จ", "สมัครเรียบร้อย");
-      // ไป Home โดยรีเซ็ต stack (กันย้อนกลับไปหน้า Login/Register)
       navigation.reset({ index: 0, routes: [{ name: "Home" }] });
     } catch (err) {
-      console.error(err);
+      console.error("[Register] error:", err);
       Alert.alert("Register Error", err?.response?.data?.error ?? err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -70,7 +76,7 @@ export default function Register({ navigation }) {
         <Picker.Item label="เพิ่มกล้าม" value="gain" />
       </Picker>
 
-      <Button title="Register" onPress={handleRegister} />
+      <Button title={loading ? "กำลังสมัคร..." : "Register"} onPress={handleRegister} disabled={loading} />
       <Button title="Go to Login" onPress={() => navigation.navigate("Login")} />
     </View>
   );
