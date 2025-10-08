@@ -1,7 +1,7 @@
-// FrontEnd/src/Login.js
 import React, { useState } from 'react';
 import { View, Text, TextInput, Button, Alert, StyleSheet, TouchableOpacity } from 'react-native';
-import { login as loginApi } from './services/api';   // ใช้ alias กันชนชื่อ
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { login as loginApi, setAuthToken } from './services/api';
 
 export default function Login({ navigation }) {
   const [email, setEmail] = useState('');
@@ -12,10 +12,31 @@ export default function Login({ navigation }) {
     try {
       if (!email || !password) return Alert.alert('กรุณากรอกอีเมลและรหัสผ่าน');
       setLoading(true);
-      await loginApi({ email: email.trim().toLowerCase(), password: password.trim() });
-      navigation.navigate('Home');
-      
+
+      // เรียก API
+      const res = await loginApi({
+        email: email.trim().toLowerCase(),
+        password: password.trim(),
+      });
+
+      // รองรับหลายรูปแบบผลลัพธ์จาก backend
+      const user = res?.user || res?.data?.user || res?.profile || null;
+      const token = res?.accessToken || res?.token || res?.data?.accessToken || null;
+
+      if (!token) throw new Error('missing accessToken from login API');
+
+      // เก็บค่าไว้ใช้ทั่วแอป
+      await AsyncStorage.setItem('accessToken', token);
+      setAuthToken(token);
+
+      const userId = user?.id ?? user?.UserID ?? null;
+      if (userId) await AsyncStorage.setItem('userId', String(userId));
+      await AsyncStorage.setItem('userEmail', (user?.email ?? email).trim().toLowerCase());
+
+      // ไปหน้า Home แบบ reset stack
+      navigation.reset({ index: 0, routes: [{ name: 'Home' }] });
     } catch (e) {
+      console.log('[Login] error:', e);
       Alert.alert('Login Error', e?.response?.data?.error || e.message);
     } finally {
       setLoading(false);
@@ -27,7 +48,13 @@ export default function Login({ navigation }) {
       <Text style={styles.title}>Login</Text>
 
       <Text style={styles.label}>Email</Text>
-      <TextInput value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" style={styles.input} />
+      <TextInput
+        value={email}
+        onChangeText={setEmail}
+        autoCapitalize="none"
+        keyboardType="email-address"
+        style={styles.input}
+      />
 
       <Text style={styles.label}>Password</Text>
       <TextInput value={password} onChangeText={setPassword} secureTextEntry style={styles.input} />
