@@ -45,7 +45,8 @@ export async function register(payload) {
     height: payload?.height ?? null,   // number | null
     age: payload?.age ?? null,         // number | null
     exercise: payload?.exercise ?? null, // 'low' | 'medium' | 'high'
-    goal: payload?.goal ?? null,         // 'maintain' | 'lose' | 'gain'
+    goal: payload?.goal ?? null,
+    sex: payload?.sex ?? null         // 'maintain' | 'lose' | 'gain'
   };
 
   const { data } = await api.post('/auth/register', body, {
