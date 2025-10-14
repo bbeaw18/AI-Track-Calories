@@ -35,17 +35,30 @@ export function setAuthToken(token) {
 
 // ---------- AUTH ----------
 export async function register(payload) {
-  const { data } = await api.post('/auth/register', {
+  const body = {
     email: String(payload?.email ?? '').trim().toLowerCase(),
     password: String(payload?.password ?? ''),
     displayName: payload?.displayName ?? null,
+
+    // ✅ เพิ่มฟิลด์ที่ต้องการบันทึกลง DB
+    weight: payload?.weight ?? null,   // number | null
+    height: payload?.height ?? null,   // number | null
+    age: payload?.age ?? null,         // number | null
+    exercise: payload?.exercise ?? null, // 'low' | 'medium' | 'high'
+    goal: payload?.goal ?? null,         // 'maintain' | 'lose' | 'gain'
+  };
+
+  const { data } = await api.post('/auth/register', body, {
+    headers: { 'Content-Type': 'application/json' },
   });
+
   if (data?.accessToken) {
     await AsyncStorage.setItem('accessToken', data.accessToken);
     setAuthToken(data.accessToken);
   }
   return data;
 }
+
 
 export async function login(payload) {
   const email = String(payload?.email ?? '').trim().toLowerCase();
