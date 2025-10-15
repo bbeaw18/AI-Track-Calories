@@ -9,6 +9,15 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import multer from 'multer';
 import child_process from 'child_process';
+import {
+  normalizeSex,
+  activityFromExercise,
+  calcBMR,
+  calcTDEE,
+  adjustForGoal,
+  calcMacros,
+} from './services/calc.js';
+import createRecommendRouter from './routes/recommend.js';
 
 // ----------------------------------------------------
 // Path & constants
@@ -21,20 +30,41 @@ const backendRoot = path.resolve(__dirname, '..');
 const dbRoot = path.join(backendRoot, 'Database');
 
 // ----------------------------------------------------
-// DB open helpers
+// DB open helpers (robust)
 // ----------------------------------------------------
-function openDb(p) {
-  const full = path.join(dbRoot, p);
+function resolveDbPath(filename) {
+  const candidates = [
+    path.join(path.resolve(__dirname, '..'), 'Database', filename), // ./Database
+    path.join(path.resolve(__dirname, '..'), 'DataBase', filename), // ./DataBase (ของคุณ)
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  // ถ้าไม่พบเลย ให้คืน path แรกไว้เตือน ไม่สร้างไฟล์ใหม่
+  return candidates[0];
+}
+
+function openDb(filename) {
+  const full = resolveDbPath(filename);
   const dir = path.dirname(full);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  if (!fs.existsSync(full)) {
+    // ❌ ห้ามสร้างไฟล์เปล่าอีกแล้ว — แจ้ง error ชัด ๆ
+    throw new Error(`DB file not found: ${full}`);
+  }
+
   const conn = new Database(full);
   conn.pragma('journal_mode = WAL');
   return conn;
 }
 
-const userDb = openDb('UserData.sqlite');         // users
-const nutritionDb = openDb('NutritionDB.sqlite'); // food nutrition lookup
-const mealDb = openDb('MealRecord.sqlite');       // meals records
+
+const userDb       = openDb('UserData.sqlite');
+const nutritionDb  = openDb('NutritionDB.sqlite');
+const nfsDb        = openDb('NutritionFromScratch.sqlite'); // ★ เพิ่มไฟล์นี้
+const mealDb       = openDb('MealRecord.sqlite');
+      // meals records
 
 console.log('📂 DB paths:');
 console.log('  UserData:', path.join(dbRoot, 'UserData.sqlite'));
@@ -71,6 +101,8 @@ addUserCol('age', 'INTEGER');
 addUserCol('exercise', 'TEXT');
 addUserCol('goal', 'TEXT');
 addUserCol('createdAt', 'TEXT');
+addUserCol('sex', 'TEXT'); // male | female
+
 
 mealDb.exec(`
 CREATE TABLE IF NOT EXISTS MealRecord (
@@ -137,7 +169,7 @@ const upload = multer({
 
 // serve uploads
 app.use('/uploads', express.static(uploadsDir));
-
+app.use(['/recommend', '/api/recommend'], createRecommendRouter(nfsDb));
 // ----------------------------------------------------
 // Middleware
 // ----------------------------------------------------
@@ -241,14 +273,14 @@ app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
 // Auth
 app.post('/auth/register', async (req, res) => {
-  const { email, password, displayName, weight, height, age, exercise, goal } = req.body || {};
+   const { email, password, displayName, weight, height, age, exercise, goal, sex } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'email_and_password_required' });
 
   try {
     const hash = await bcrypt.hash(password, 12);
     const stmt = userDb.prepare(`
-      INSERT INTO User (email, password, displayName, weight, height, age, exercise, goal)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO User (email, password, displayName, weight, height, age, exercise, goal, sex)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const info = stmt.run(
       String(email).trim().toLowerCase(),
@@ -258,7 +290,8 @@ app.post('/auth/register', async (req, res) => {
       height !== undefined && height !== '' ? parseFloat(height) : null,
       age !== undefined && age !== '' ? parseInt(age, 10) : null,
       exercise ?? null,
-      goal ?? null
+      goal ?? null,
+      (sex && String(sex).toLowerCase()) || null   // 'male' | 'female'
     );
 
     const user = {
@@ -269,7 +302,8 @@ app.post('/auth/register', async (req, res) => {
       height: height !== undefined && height !== '' ? parseFloat(height) : null,
       age: age !== undefined && age !== '' ? parseInt(age, 10) : null,
       exercise: exercise ?? null,
-      goal: goal ?? null
+      goal: goal ?? null,
+      sex: (sex && String(sex).toLowerCase()) || null
     };
     const accessToken = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
     res.status(201).json({ user, accessToken });
@@ -300,11 +334,148 @@ app.post('/auth/login', async (req, res) => {
       height: row.height,
       age: row.age,
       exercise: row.exercise,
-      goal: row.goal
+      goal: row.goal,
+      sex: row.sex
     },
     accessToken
   });
 });
+// ---------------- Nutrition Calc ----------------
+
+// ใช้ JWT → โภชนาการของ "ตัวเอง"
+app.get('/auth/me/nutrition', authGuard, (req, res) => {
+  try {
+    const u = getUserById(req.user.id);
+    if (!u) return res.status(404).json({ error: 'user_not_found' });
+
+    // รับ sex จาก body (กรณี DB ยังไม่มี)
+    const sex = normalizeSex((req.body && req.body.sex) || u.sex);
+    const ageYears = Number(u.age);
+    const heightCm = Number(u.height);
+    const weightKg = Number(u.weight);
+
+    if (!sex) return res.status(400).json({ error: 'missing_sex (provide in DB or body)' });
+    if (!Number.isFinite(ageYears) || ageYears <= 0) return res.status(400).json({ error: 'invalid_age' });
+    if (!Number.isFinite(heightCm) || heightCm <= 0) return res.status(400).json({ error: 'invalid_height' });
+    if (!Number.isFinite(weightKg) || weightKg <= 0) return res.status(400).json({ error: 'invalid_weight' });
+
+    // override ได้ด้วย query: ?activity=1.55&protein_per_kg=1.0&fat_per_kg=1.0
+    const activityFactor = activityFromExercise(u.exercise, req.query.activity);
+    const proteinPerKg = Number(req.query.protein_per_kg ?? 1.0);
+    const fatPerKg     = Number(req.query.fat_per_kg ?? 1.0);
+
+    const bmr  = calcBMR({ sex, weightKg, heightCm, ageYears });
+    const tdee = calcTDEE({ bmr, activityFactor });
+    const targetCalories = Math.max(0, adjustForGoal(tdee, u.goal));
+    const macros = calcMacros({ targetCalories, weightKg, proteinPerKg, fatPerKg });
+
+    const round = (x, d=0) => Number(x.toFixed(d));
+
+    res.json({
+      user: {
+        id: u.id, email: u.email, displayName: u.displayName,
+        sex, age: ageYears, height_cm: heightCm, weight_kg: weightKg,
+        exercise: u.exercise, goal: u.goal,
+      },
+      assumptions: {
+        activity_factor: activityFactor,
+        protein_g_per_kg: proteinPerKg,
+        fat_g_per_kg: fatPerKg,
+        formula: 'Mifflin-St Jeor',
+        notes: 'Carbs = (TargetKcal - (Protein*4 + Fat*9))/4',
+      },
+      energy: {
+        bmr_kcal: round(bmr, 0),
+        tdee_kcal: round(tdee, 0),
+        target_calories_kcal: round(targetCalories, 0),
+      },
+      macros: {
+        protein_g: round(macros.proteinG, 0),
+        fat_g:     round(macros.fatG, 0),
+        carbs_g:   round(macros.carbsG, 0),
+      },
+      precise: {
+        bmr_kcal: bmr,
+        tdee_kcal: tdee,
+        target_calories_kcal: targetCalories,
+        protein_g: macros.proteinG,
+        fat_g: macros.fatG,
+        carbs_g: macros.carbsG,
+      }
+    });
+  } catch (err) {
+    console.error('[GET /auth/me/nutrition] error:', err);
+    res.status(500).json({ error: 'server_error', detail: String(err.message || err) });
+  }
+});
+
+// ระบุ userId เอง (เช่น แอดมิน)
+app.get('/auth/users/:id/nutrition', (req, res) => {
+  try {
+    const userId = Number(req.params.id);
+    if (!Number.isInteger(userId)) return res.status(400).json({ error: 'invalid_user_id' });
+    const u = getUserById(userId);
+    if (!u) return res.status(404).json({ error: 'user_not_found' });
+
+    const sex = normalizeSex((req.body && req.body.sex) || u.sex);
+    const ageYears = Number(u.age);
+    const heightCm = Number(u.height);
+    const weightKg = Number(u.weight);
+
+    if (!sex) return res.status(400).json({ error: 'missing_sex (provide in DB or body)' });
+    if (!Number.isFinite(ageYears) || ageYears <= 0) return res.status(400).json({ error: 'invalid_age' });
+    if (!Number.isFinite(heightCm) || heightCm <= 0) return res.status(400).json({ error: 'invalid_height' });
+    if (!Number.isFinite(weightKg) || weightKg <= 0) return res.status(400).json({ error: 'invalid_weight' });
+
+    const activityFactor = activityFromExercise(u.exercise, req.query.activity);
+    const proteinPerKg = Number(req.query.protein_per_kg ?? 1.0);
+    const fatPerKg     = Number(req.query.fat_per_kg ?? 1.0);
+
+    const bmr  = calcBMR({ sex, weightKg, heightCm, ageYears });
+    const tdee = calcTDEE({ bmr, activityFactor });
+    const targetCalories = Math.max(0, adjustForGoal(tdee, u.goal));
+    const macros = calcMacros({ targetCalories, weightKg, proteinPerKg, fatPerKg });
+
+    const round = (x, d=0) => Number(x.toFixed(d));
+
+    res.json({
+      user: {
+        id: u.id, email: u.email, displayName: u.displayName,
+        sex, age: ageYears, height_cm: heightCm, weight_kg: weightKg,
+        exercise: u.exercise, goal: u.goal,
+      },
+      assumptions: {
+        activity_factor: activityFactor,
+        protein_g_per_kg: proteinPerKg,
+        fat_g_per_kg: fatPerKg,
+        formula: 'Mifflin-St Jeor',
+        notes: 'Carbs = (TargetKcal - (Protein*4 + Fat*9))/4',
+      },
+      energy: {
+        bmr_kcal: round(bmr, 0),
+        tdee_kcal: round(tdee, 0),
+        target_calories_kcal: round(targetCalories, 0),
+      },
+      macros: {
+        protein_g: round(macros.proteinG, 0),
+        fat_g:     round(macros.fatG, 0),
+        carbs_g:   round(macros.carbsG, 0),
+      },
+      precise: {
+        bmr_kcal: bmr,
+        tdee_kcal: tdee,
+        target_calories_kcal: targetCalories,
+        protein_g: macros.proteinG,
+        fat_g: macros.fatG,
+        carbs_g: macros.carbsG,
+      }
+    });
+  } catch (err) {
+    console.error('[GET /auth/users/:id/nutrition] error:', err);
+    res.status(500).json({ error: 'server_error', detail: String(err.message || err) });
+  }
+});
+
 
 // AI Predict
 app.post('/ai/predict', authGuard, upload.single('image'), async (req, res) => {
@@ -355,6 +526,12 @@ app.get('/nutrition', authGuard, (req, res) => {
     carb: nut.carb ?? (nut.carbs ?? null)
   });
 });
+function getUserById(userId) {
+  return userDb.prepare(`
+    SELECT id, email, displayName, sex, age, height, weight, exercise, goal
+    FROM User WHERE id = ?
+  `).get(userId);
+}
 
 // Save meal
 app.post('/meals', authGuard, upload.single('image'), (req, res) => {

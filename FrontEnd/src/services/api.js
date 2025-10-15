@@ -35,17 +35,31 @@ export function setAuthToken(token) {
 
 // ---------- AUTH ----------
 export async function register(payload) {
-  const { data } = await api.post('/auth/register', {
+  const body = {
     email: String(payload?.email ?? '').trim().toLowerCase(),
     password: String(payload?.password ?? ''),
     displayName: payload?.displayName ?? null,
+
+    // ✅ เพิ่มฟิลด์ที่ต้องการบันทึกลง DB
+    weight: payload?.weight ?? null,   // number | null
+    height: payload?.height ?? null,   // number | null
+    age: payload?.age ?? null,         // number | null
+    exercise: payload?.exercise ?? null, // 'low' | 'medium' | 'high'
+    goal: payload?.goal ?? null,
+    sex: payload?.sex ?? null         // 'maintain' | 'lose' | 'gain'
+  };
+
+  const { data } = await api.post('/auth/register', body, {
+    headers: { 'Content-Type': 'application/json' },
   });
+
   if (data?.accessToken) {
     await AsyncStorage.setItem('accessToken', data.accessToken);
     setAuthToken(data.accessToken);
   }
   return data;
 }
+
 
 export async function login(payload) {
   const email = String(payload?.email ?? '').trim().toLowerCase();
@@ -84,3 +98,19 @@ export async function getMeals(date) {
   const { data } = await api.get('/meals', { params: { date } });
   return data; // { items, summary, perType }
 }
+export async function getMyNutrition(params) {
+  // override ได้ เช่น { activity: 1.55, protein_per_kg: 1, fat_per_kg: 1 }
+  const { data } = await api.get('/auth/me/nutrition', { params });
+  return data; // { energy:{...}, macros:{protein_g,fat_g,carbs_g}, ...}
+}
+// ---------- Recommend ----------
+export async function getRecommendedFoods(params = {}) {
+  // ตัวอย่าง params: { all: 1 } หรือ { page: 1, limit: 50, search: 'ไก่' }
+  const { data } = await api.get('/recommend', { params });
+  // data = { items: [...], meta: {...} }
+  return data;
+}
+
+
+
+

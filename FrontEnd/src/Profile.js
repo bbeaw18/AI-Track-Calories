@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, StyleSheet, Image, ActivityIndicator, TouchableOpacity } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { auth, db } from "./firebaseConfig";
 import { doc, getDoc } from "firebase/firestore";
 
 export default function Profile({ navigation }) {

@@ -1,4 +1,3 @@
-// FrontEnd/src/nav/index.js
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -8,6 +7,7 @@ import Register from '../Register';
 import Home from '../Home';
 import UploadFood from '../UploadFood';
 import History from '../History';
+import RecommendScreen from '../Recommend'; // <- ให้ตรงชื่อไฟล์จริง
 
 const Stack = createNativeStackNavigator();
 
@@ -20,6 +20,7 @@ export default function AppNav() {
         <Stack.Screen name="Home" component={Home} />
         <Stack.Screen name="UploadFood" component={UploadFood} />
         <Stack.Screen name="History" component={History} />
+        <Stack.Screen name="Recommend" component={RecommendScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );
