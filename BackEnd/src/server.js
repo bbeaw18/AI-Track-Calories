@@ -9,6 +9,17 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import multer from 'multer';
 import child_process from 'child_process';
+import createRecommendRouter from './routes/recommend.js';
+import {
+  normalizeSex,
+  activityFromExercise,
+  calcBMR,
+  calcTDEE,
+  adjustForGoal,
+  calcMacros,
+} from './services/calc.js';
+
+
 
 // ----------------------------------------------------
 // Path & constants
@@ -24,14 +35,15 @@ const dbRoot = path.join(backendRoot, 'Database');
 // DB open helpers (robust)
 // ----------------------------------------------------
 function resolveDbPath(filename) {
+  const base = path.resolve(__dirname, '..');
   const candidates = [
-    path.join(path.resolve(__dirname, '..'), 'Database', filename), // ./Database
-    path.join(path.resolve(__dirname, '..'), 'DataBase', filename), // ./DataBase (ของคุณ)
+    path.join(base, 'Database', filename), // ./Database
+    path.join(base, 'DataBase', filename), // ./DataBase  (กรณีคุณสะกดแบบนี้)
   ];
   for (const p of candidates) {
     if (fs.existsSync(p)) return p;
   }
-  // ถ้าไม่พบเลย ให้คืน path แรกไว้เตือน ไม่สร้างไฟล์ใหม่
+  // ถ้าไม่พบเลย ให้คืน path แรก (แล้วค่อยโยน error ตอนเปิด)
   return candidates[0];
 }
 
@@ -39,16 +51,14 @@ function openDb(filename) {
   const full = resolveDbPath(filename);
   const dir = path.dirname(full);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
   if (!fs.existsSync(full)) {
-    // ❌ ห้ามสร้างไฟล์เปล่าอีกแล้ว — แจ้ง error ชัด ๆ
     throw new Error(`DB file not found: ${full}`);
   }
-
   const conn = new Database(full);
   conn.pragma('journal_mode = WAL');
   return conn;
 }
+
 
 
 const userDb       = openDb('UserData.sqlite');

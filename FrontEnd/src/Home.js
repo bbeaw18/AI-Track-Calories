@@ -218,7 +218,7 @@ export default function Home({ navigation }) {
       </ScrollView>
 
       {/* เมนูล่างคงเดิม */}
-      <View style={styles.bottomMenu}>
+     <View style={styles.bottomMenu}>
   <TouchableOpacity style={styles.menuBtn} onPress={() => navigation.navigate("Home")}>
     <Ionicons name="home" size={24} color="#333" />
     <Text style={styles.menuText}>Home</Text>
@@ -244,6 +244,7 @@ export default function Home({ navigation }) {
     <Text style={styles.menuText}>ตั้งค่า</Text>
   </TouchableOpacity>
 </View>
+
 
     </View>
   );

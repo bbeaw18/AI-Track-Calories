@@ -105,11 +105,12 @@ export async function getMyNutrition(params) {
 }
 // ---------- Recommend ----------
 export async function getRecommendedFoods(params = {}) {
-  // ตัวอย่าง params: { all: 1 } หรือ { page: 1, limit: 50, search: 'ไก่' }
+  // ใช้ { all: 1 } เพื่อดึงทั้งหมด หรือ { page, limit, search }
   const { data } = await api.get('/recommend', { params });
-  // data = { items: [...], meta: {...} }
+  // ส่งคืนทั้งก้อน เพื่อให้หน้าเลือกใช้ meta ได้
   return data;
 }
+
 
 
 
