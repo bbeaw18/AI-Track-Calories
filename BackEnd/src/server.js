@@ -9,15 +9,6 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import multer from 'multer';
 import child_process from 'child_process';
-import {
-  normalizeSex,
-  activityFromExercise,
-  calcBMR,
-  calcTDEE,
-  adjustForGoal,
-  calcMacros,
-} from './services/calc.js';
-import createRecommendRouter from './routes/recommend.js';
 
 // ----------------------------------------------------
 // Path & constants
