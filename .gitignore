@@ -1,0 +1,13 @@
+BackEnd/node_modules/
+FrontEnd/node_modules/
+
+BackEnd/AI/whisper_env/
+BackEnd/uploads/
+BackEnd/src/uploads/
+BackEnd/stt/
+
+*.sqlite-shm
+*.sqlite-wal
+
+.env
+.env.*

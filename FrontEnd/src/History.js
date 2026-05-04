@@ -1,297 +1,311 @@
+// FrontEnd/src/History.js
 import React, { useEffect, useState } from "react";
-import { View, Text, FlatList, Button, Alert, Platform } from "react-native";
+import {
+  View,
+  Text,
+  FlatList,
+  ActivityIndicator,
+  TouchableOpacity,
+  Alert,
+  DeviceEventEmitter,
+  StyleSheet,
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useIsFocused } from "@react-navigation/native";
-import * as SQLite from "expo-sqlite";          // API ใหม่ (async)
-import * as FileSystem from "expo-file-system";  // ใช้ StorageAccessFramework (Android)
-import AsyncStorage from "@react-native-async-storage/async-storage";
-
-let _dbPromise = null;
-function getDb() {
-  if (!_dbPromise) _dbPromise = SQLite.openDatabaseAsync("MealRecord.sqlite");
-  return _dbPromise;
+import { Calendar } from "react-native-calendars";
+import * as SQLite from "expo-sqlite";
+import { getMeals, deleteMeal, getWater, api } from "./services/api";
+/* ---------- Helper ---------- */
+function todayThailandISO() {
+  const now = new Date();
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  const th = new Date(utc + 7 * 60 * 60 * 1000);
+  const y = th.getFullYear();
+  const m = String(th.getMonth() + 1).padStart(2, "0");
+  const d = String(th.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
-async function ensureSchema() {
-  const db = await getDb();
-  await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS meal_record (
-      MealRecordID INTEGER PRIMARY KEY AUTOINCREMENT,
-      UserID INTEGER NOT NULL,
-      FoodID INTEGER NOT NULL,
-      FoodImage TEXT,
-      FoodQuantity REAL,
-      MealType TEXT,
-      Date TEXT NOT NULL,
-      Time TEXT NOT NULL,
-      EnergyKcal REAL,
-      ProteinG REAL,
-      FatG REAL,
-      CarbohydrateG REAL,
-      PortionMultiplier REAL DEFAULT 1,
-      FoodName TEXT
-    );
-  `);
-  await db.execAsync(`
-    CREATE INDEX IF NOT EXISTS idx_meal_record_user_date
-    ON meal_record (UserID, Date);
-  `);
-}
-
-// อ่าน userId ปัจจุบันจาก AsyncStorage
-async function getCurrentUserId() {
-  const raw = await AsyncStorage.getItem("userId");
-  const id = raw ? Number(raw) : NaN;
-  if (!raw || !Number.isFinite(id)) throw new Error("no_user_id_in_storage");
-  return id;
-}
-
-// แปลงวันนี้แบบ LOCAL
-function todayLocal() {
-  const d = new Date();
-  const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-async function resolveCurrentUserId() {
-  const raw = await AsyncStorage.getItem("userId");
-  if (raw) {
-    const id = Number(raw);
-    if (Number.isFinite(id) && id > 0) return id;
+async function deleteLocalMealIfExists(id) {
+  try {
+    const db = await SQLite.openDatabaseAsync("MealRecord.sqlite");
+    await db.execAsync(`DELETE FROM meal_record WHERE MealRecordID = ? OR FoodID = ?`, [id, id]);
+  } catch (e) {
+    console.log("[History] deleteLocalMealIfExists error:", e?.message);
   }
-  const email = await AsyncStorage.getItem("userEmail");
-  if (email) {
-    try {
-      const udb = await SQLite.openDatabaseAsync("UserData.sqlite");
-      const row = await udb.getFirstAsync(
-        `SELECT UserID AS id FROM users WHERE Email = ? LIMIT 1`,
-        [email]
-      );
-      if (row?.id) {
-        await AsyncStorage.setItem("userId", String(row.id));
-        return Number(row.id);
-      }
-    } catch (e) {
-      console.log("[History] resolve user fallback error:", e?.message);
-    }
-  }
-  throw new Error("no_user_id_in_storage");
 }
 
-export default function History() {
+/* ---------- Main ---------- */
+export default function History({ navigation }) {
   const [items, setItems] = useState([]);
-  const isFocused = useIsFocused();
+  const [selectedDate, setSelectedDate] = useState(todayThailandISO());
+const [water, setWater] = useState(null);      // ⬅️ เพิ่มบรรทัดนี้
+  const [waterMax, setWaterMax] = useState(8);
+  const [loading, setLoading] = useState(false);  const isFocused = useIsFocused();
 
-  async function loadToday() {
-    await ensureSchema();
-    const db = await getDb();
+  async function loadByDate(dateStr) {
+    try {
+      setLoading(true);
 
-    let userId;
-try {
-  userId = await resolveCurrentUserId();
-} catch {
-  console.log("[History] no_user_id_in_storage");
-  setItems([]);
-  // ถ้าอยาก force ให้ไปหน้า Login:
-  // Alert.alert("ต้องล็อกอิน", "กรุณาเข้าสู่ระบบ", [{ text: "OK" }]);
-  return;
-}
+      const mealRes = await getMeals(dateStr);
+      const list = Array.isArray(mealRes?.items) ? mealRes.items : [];
 
+      const rows = list
+        .slice()
+        .sort((a, b) => String(b.id).localeCompare(String(a.id)))
+        .map((it) => ({
+          id: it.id,
+          date: it.date,
+          mealType: it.mealType,
+          name: it.name,
+          quantity: it.quantity,
+          kcal: it.kcal,
+          protein: it.protein,
+          fat: it.fat,
+          carb: it.carb,
+          image_uri: it.imagePath || null,
+        }));
 
-    const today = todayLocal();
-    console.log("[History] today ->", today, "userId ->", userId);
+      setItems(rows);
 
-    const rows = await db.getAllAsync(
-      `SELECT
-         MealRecordID   AS id,
-         Date           AS date,
-         MealType       AS mealType,
-         FoodName       AS name,
-         FoodQuantity   AS quantity,
-         EnergyKcal     AS kcal,
-         ProteinG       AS protein,
-         FatG           AS fat,
-         CarbohydrateG  AS carb,
-         FoodImage      AS image_uri
-       FROM meal_record
-       WHERE UserID = ? AND Date = ?
-       ORDER BY Date DESC, Time DESC, MealRecordID DESC`,
-      [userId, today]
+      try {
+        const w = await getWater(dateStr);
+        setWater(Number(w?.glasses ?? 0));
+      } catch {
+        setWater(null);
+      }
+      try {
+    const { data } = await api.get('/auth/me/water');
+    // max แก้ว = ลิตรสูงสุด / 0.25 (ปัดใกล้สุด และอย่างน้อย 1)
+    const maxGlasses = Math.max(
+      1,
+      Math.round(Number(data?.max_l_per_day ?? 2) / 0.25)
     );
-    console.log(`[History] rows today for user ${userId} ->`, rows?.length || 0);
-
-    setItems(rows || []);
+    setWaterMax(maxGlasses);
+  } catch (e) {
+    // ถ้าดึงไม่สำเร็จ ใช้ค่าเดิม (เช่น 8)
+  }
+    } catch (e) {
+      console.log("[History] loadByDate error:", e?.response?.data || e.message);
+      setItems([]);
+      setWater(null);
+      Alert.alert("เกิดข้อผิดพลาด", "โหลดข้อมูลไม่สำเร็จ");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    loadToday().catch((e) => console.log("history load error", e?.message));
+    if (isFocused && selectedDate) loadByDate(selectedDate);
   }, [isFocused]);
 
-  // ---------- EXPORT HELPERS (ไม่ต้องใช้ expo-sharing) ----------
-  async function pickDirAndroid() {
-    const perm = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
-    if (!perm.granted) throw new Error("ผู้ใช้ยกเลิกการเลือกโฟลเดอร์");
-    return perm.directoryUri;
+  /* ---------- Delete ---------- */
+  function onDeletePress(id) {
+    Alert.alert("ยืนยันการลบ", "คุณต้องการลบรายการนี้หรือไม่?", [
+      { text: "ยกเลิก", style: "cancel" },
+      {
+        text: "ลบ",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await deleteMeal(id);
+            setItems((prev) => prev.filter((x) => x.id !== id));
+            await deleteLocalMealIfExists(id);
+            await loadByDate(selectedDate);
+            Alert.alert("✅ ลบสำเร็จ", "ลบรายการอาหารเรียบร้อยแล้ว");
+          } catch (e) {
+            console.log("[History] delete error:", e?.response?.data || e.message);
+            Alert.alert("เกิดข้อผิดพลาด", "ไม่สามารถลบรายการได้");
+          }
+        },
+      },
+    ]);
   }
 
-  async function writeFileAndroid(directoryUri, filename, mime, content, isBase64 = false) {
-    const fileUri = await FileSystem.StorageAccessFramework.createFileAsync(
-      directoryUri,
-      filename,
-      mime
-    );
-    await FileSystem.writeAsStringAsync(fileUri, content, {
-      encoding: isBase64 ? FileSystem.EncodingType.Base64 : FileSystem.EncodingType.UTF8,
-    });
-    return fileUri;
-  }
-
-  // 1) EXPORT JSON (จาก meal_record)
-  async function exportAsJSON() {
-    try {
-      await ensureSchema();
-      const db = await getDb();
-      const rows = await db.getAllAsync(`SELECT * FROM meal_record ORDER BY MealRecordID`);
-      const json = JSON.stringify(rows, null, 2);
-
-      if (Platform.OS === "android") {
-        const dir = await pickDirAndroid();
-        const filename = `MealRecord-${Date.now()}.json`;
-        await writeFileAndroid(dir, filename, "application/json", json);
-        Alert.alert("Exported", `บันทึกไฟล์ ${filename} แล้ว`);
-      } else {
-        const p = FileSystem.documentDirectory + `MealRecord-${Date.now()}.json`;
-        await FileSystem.writeAsStringAsync(p, json);
-        Alert.alert("Exported (iOS)", p);
-      }
-    } catch (e) {
-      console.log("exportAsJSON error:", e?.message);
-      Alert.alert("Export JSON Error", e?.message || "unknown");
-    }
-  }
-
-  // 2) EXPORT CSV (จาก meal_record)
-  async function exportAsCSV() {
-    try {
-      await ensureSchema();
-      const db = await getDb();
-      const rows = await db.getAllAsync(`SELECT * FROM meal_record ORDER BY MealRecordID`);
-
-      const header = [
-        "MealRecordID","UserID","FoodID","FoodName","FoodImage","FoodQuantity",
-        "MealType","Date","Time",
-        "EnergyKcal","ProteinG","FatG","CarbohydrateG","PortionMultiplier"
-      ];
-      const csv = [
-        header.join(","),
-        ...rows.map(r => header.map(k => {
-          const v = r[k] ?? "";
-          const s = String(v).replace(/"/g, '""');
-          return `"${s}"`;
-        }).join(","))
-      ].join("\n");
-
-      if (Platform.OS === "android") {
-        const dir = await pickDirAndroid();
-        const filename = `MealRecord-${Date.now()}.csv`;
-        await writeFileAndroid(dir, filename, "text/csv", csv);
-        Alert.alert("Exported", `บันทึกไฟล์ ${filename} แล้ว`);
-      } else {
-        const p = FileSystem.documentDirectory + `MealRecord-${Date.now()}.csv`;
-        await FileSystem.writeAsStringAsync(p, csv);
-        Alert.alert("Exported (iOS)", p);
-      }
-    } catch (e) {
-      console.log("exportAsCSV error:", e?.message);
-      Alert.alert("Export CSV Error", e?.message || "unknown");
-    }
-  }
-
-  // 3) EXPORT SQL DUMP (สำหรับ meal_record)
-  async function exportAsSQL() {
-    try {
-      await ensureSchema();
-      const db = await getDb();
-      const rows = await db.getAllAsync(`SELECT * FROM meal_record ORDER BY MealRecordID`);
-
-      const createSQL = `
-CREATE TABLE IF NOT EXISTS meal_record (
-  MealRecordID INTEGER PRIMARY KEY AUTOINCREMENT,
-  UserID INTEGER NOT NULL,
-  FoodID INTEGER NOT NULL,
-  FoodImage TEXT,
-  FoodQuantity REAL,
-  MealType TEXT,
-  Date TEXT NOT NULL,
-  Time TEXT NOT NULL,
-  EnergyKcal REAL,
-  ProteinG REAL,
-  FatG REAL,
-  CarbohydrateG REAL,
-  PortionMultiplier REAL DEFAULT 1,
-  FoodName TEXT
-);
-`.trim();
-
-      const esc = (v) => {
-        if (v === null || v === undefined) return "NULL";
-        if (typeof v === "number") return isFinite(v) ? String(v) : "NULL";
-        return `'${String(v).replace(/'/g, "''")}'`;
-      };
-
-      const inserts = rows.map(r => {
-        return `INSERT INTO meal_record (MealRecordID,UserID,FoodID,FoodImage,FoodQuantity,MealType,Date,Time,EnergyKcal,ProteinG,FatG,CarbohydrateG,PortionMultiplier,FoodName) VALUES (${
-          [
-            esc(r.MealRecordID), esc(r.UserID), esc(r.FoodID), esc(r.FoodImage), esc(r.FoodQuantity),
-            esc(r.MealType), esc(r.Date), esc(r.Time),
-            esc(r.EnergyKcal), esc(r.ProteinG), esc(r.FatG), esc(r.CarbohydrateG),
-            esc(r.PortionMultiplier), esc(r.FoodName)
-          ].join(",")
-        });`;
-      }).join("\n");
-
-      const content = `BEGIN TRANSACTION;\n${createSQL}\n${inserts}\nCOMMIT;`;
-
-      if (Platform.OS === "android") {
-        const dir = await pickDirAndroid();
-        const filename = `MealRecord-${Date.now()}.sql`;
-        await writeFileAndroid(dir, filename, "application/sql", content);
-        Alert.alert("Exported", `บันทึกไฟล์ ${filename} แล้ว\nนำไป import ใน DB Browser for SQLite ได้`);
-      } else {
-        const p = FileSystem.documentDirectory + `MealRecord-${Date.now()}.sql`;
-        await FileSystem.writeAsStringAsync(p, content);
-        Alert.alert("Exported (iOS)", p);
-      }
-    } catch (e) {
-      console.log("exportAsSQL error:", e?.message);
-      Alert.alert("Export SQL Error", e?.message || "unknown");
-    }
-  }
-
+  /* ---------- Render ---------- */
   return (
-    <View style={{ flex: 1, padding: 16 }}>
-      {/* ปุ่ม Export */}
-      <View style={{ flexDirection: "row", gap: 8, justifyContent: "space-between" }}>
-        <Button title="EXPORT JSON" onPress={exportAsJSON} />
-        <Button title="EXPORT CSV" onPress={exportAsCSV} />
-        <Button title="EXPORT SQL" onPress={exportAsSQL} />
-      </View>
+    <View style={styles.container}>
+      <Text style={styles.headerTitle}>ประวัติการกิน 🍱</Text>
 
-      <FlatList
-        style={{ marginTop: 12 }}
-        data={items}
-        keyExtractor={(it) => String(it.id)}
-        renderItem={({ item }) => (
-          <View style={{ padding: 12, borderBottomWidth: 1, borderColor: "#eee" }}>
-            <Text>{item.date} • {item.mealType}</Text>
-            {item.name ? <Text>{item.name}</Text> : null}
-            <Text>{`kcal: ${item.kcal ?? 0} | P: ${item.protein ?? 0}g | F: ${item.fat ?? 0}g | C: ${item.carb ?? 0}g`}</Text>
-          </View>
-        )}
-        ListEmptyComponent={
-          <Text style={{ textAlign: "center", color: "#999", marginTop: 24 }}>
-            ยังไม่มีรายการวันนี้
-          </Text>
+      <Calendar
+        markedDates={
+          selectedDate
+            ? { [selectedDate]: { selected: true, marked: true, selectedColor: "#2563EB" } }
+            : {}
         }
+        theme={{
+          backgroundColor: "#fff",
+          calendarBackground: "#fff",
+          selectedDayBackgroundColor: "#2563EB",
+          todayTextColor: "#EF4444",
+          arrowColor: "#2563EB",
+          monthTextColor: "#111827",
+          textMonthFontWeight: "bold",
+        }}
+        onDayPress={(day) => {
+          setSelectedDate(day.dateString);
+          loadByDate(day.dateString);
+        }}
+        style={styles.calendar}
       />
+
+      <View style={styles.section}>
+  <Text style={styles.sectionTitle} numberOfLines={1} ellipsizeMode="tail">
+    📅 สรุปรายสัปดาห์
+  </Text>
+  <TouchableOpacity
+    onPress={() => navigation?.navigate?.("WeeklySummary")}
+    style={styles.weeklyButton}
+    activeOpacity={0.85}
+  >
+    <Ionicons name="stats-chart-outline" size={18} color="#fff" />
+    <Text style={styles.weeklyButtonText}>ดูสรุปทั้งหมด</Text>
+  </TouchableOpacity>
+</View>
+
+
+
+      {loading ? (
+        <View style={styles.center}>
+          <ActivityIndicator />
+          <Text style={{ marginTop: 8, color: "#64748B" }}>กำลังโหลดข้อมูล...</Text>
+        </View>
+      ) : (
+        <>
+          <Text style={styles.dateTitle}>รายการวันที่ {selectedDate}</Text>
+
+          {water != null && (
+  <View style={styles.waterBox}>
+    <Ionicons name="water-outline" size={18} color="#2563EB" />
+    <Text style={styles.waterText}>
+      ดื่มน้ำวันนี้: {water} / {waterMax} แก้ว
+    </Text>
+  </View>
+)}
+
+
+          <FlatList
+            data={items}
+            keyExtractor={(it) => String(it.id)}
+            contentContainerStyle={{ paddingBottom: 100 }}
+            renderItem={({ item }) => (
+              <View style={styles.mealCard}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.mealName}>
+                    🍽 {item.mealType || "มื้ออื่นๆ"} - {item.name}
+                  </Text>
+                  <Text style={styles.macroText}>
+                    kcal {item.kcal ?? 0} | P {item.protein ?? 0}g | F {item.fat ?? 0}g | C{" "}
+                    {item.carb ?? 0}g
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => onDeletePress(item.id)}
+                  style={styles.deleteBtn}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="trash-outline" size={18} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            )}
+            ListEmptyComponent={
+              <Text style={styles.emptyText}>ไม่มีข้อมูลในวันนี้ 💤</Text>
+            }
+          />
+        </>
+      )}
     </View>
   );
 }
+
+/* ---------- Styles ---------- */
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#F8FAFC", paddingTop: 40 },
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    textAlign: "center",
+    color: "#111827",
+    marginBottom: 10,
+  },
+  calendar: {
+    marginHorizontal: 12,
+    borderRadius: 12,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  section: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginHorizontal: 16,
+    marginTop: 16,
+    marginBottom: 10,
+  },
+sectionTitle: {
+   fontSize: 16,
+   fontWeight: "700",
+   color: "#111827",
+   flex: 1,            // กินพื้นที่ซ้ายให้มากสุด
+   marginRight: 12,    // กันชนกับปุ่ม
+ },
+   weeklyButton: {
+    flexDirection: "row",
+    backgroundColor: "#2563EB",
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    alignItems: "center",
+    gap: 6,
+  },
+  weeklyButtonText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+
+  dateTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111827",
+    textAlign: "center",
+    marginTop: 10,
+    marginBottom: 8,
+  },
+  waterBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1,
+    borderColor: "#DBEAFE",
+    padding: 10,
+    marginHorizontal: 16,
+    borderRadius: 10,
+    marginBottom: 8,
+  },
+  waterText: { color: "#1E40AF", fontWeight: "700", fontSize: 14 },
+  mealCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#FFFFFF",
+    marginHorizontal: 16,
+    marginVertical: 5,
+    padding: 14,
+    borderRadius: 12,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  mealName: { fontWeight: "700", fontSize: 15, color: "#111827" },
+  macroText: { color: "#6B7280", fontSize: 13, marginTop: 4 },
+  deleteBtn: {
+    backgroundColor: "#DC2626",
+    padding: 8,
+    borderRadius: 8,
+  },
+  center: { marginTop: 30, alignItems: "center" },
+  emptyText: { textAlign: "center", color: "#9CA3AF", marginTop: 40, fontSize: 15 },
+});

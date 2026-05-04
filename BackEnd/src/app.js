@@ -4,7 +4,7 @@ import cors from 'cors';
 import authRoutes from './routes/auth.js';
 
 const app = express();
-app.use(cors({ origin: '*' })); // dev เท่านั้น
+app.use(cors({ origin: '*' })); 
 app.use(express.json());
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
