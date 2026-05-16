@@ -2,6 +2,7 @@
 import express from "express";
 import multer from "multer";
 import fs from "fs/promises";
+import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { spawn } from "child_process";
@@ -18,9 +19,18 @@ const uploadsDir = path.join(backendRoot, "uploads");
 await fs.mkdir(uploadsDir, { recursive: true }).catch(() => {});
 
 
-const dbPath = process.env.DB_PATH
-  ? path.resolve(process.env.DB_PATH)
-  : path.resolve(backendRoot, "../Database/NutritionFromScratch.sqlite");
+// resolve NFS DB: probe both "Database"/"DataBase" casings so it works
+// on case-sensitive filesystems too (Windows behavior unchanged)
+function resolveNfsDbPath() {
+  if (process.env.DB_PATH) return path.resolve(process.env.DB_PATH);
+  const candidates = [
+    path.resolve(backendRoot, "../Database/NutritionFromScratch.sqlite"),
+    path.resolve(backendRoot, "../DataBase/NutritionFromScratch.sqlite"),
+  ];
+  for (const p of candidates) if (existsSync(p)) return p;
+  return candidates[0];
+}
+const dbPath = resolveNfsDbPath();
 
 const nfsDb = new Database(dbPath, { readonly: true });
 

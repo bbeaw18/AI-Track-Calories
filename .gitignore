@@ -6,8 +6,13 @@ BackEnd/uploads/
 BackEnd/src/uploads/
 BackEnd/stt/
 
+*.sqlite
 *.sqlite-shm
 *.sqlite-wal
 
 .env
 .env.*
+
+# Claude Code local files
+CLAUDE.md
+.claude/

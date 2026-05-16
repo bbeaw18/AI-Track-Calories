@@ -189,24 +189,6 @@ export async function getMyNutrition(params = {}) {
   const { data } = await api.get('/auth/me/nutrition', { params });
   return data; 
 }
-export async function enableTwoFASetup({ userId, accountName, issuer }) {
-  const { data } = await api.post('/2fa/setup', { userId, accountName, issuer });
-  return data;
-}
-
-export async function verifyTwoFASetup({ userId, token }) {
-  const { data } = await api.post('/2fa/verify-setup', { userId, token });
-  return data;
-}
-
-export async function checkTwoFA({ userId, token, tempToken }) {
-  const { data } = await api.post('/2fa/check', { userId, token, tempToken });
-  
-  if (data?.accessToken) await setAuthToken(data.accessToken);
-  else if (data?.token)   await setAuthToken(data.token);
-  return data;
-}
-
 export async function resetRequest(email) {
   const { data } = await api.post('/auth/reset/request', { email: String(email||'').trim().toLowerCase() });
   return data; 

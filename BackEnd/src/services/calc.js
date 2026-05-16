@@ -88,12 +88,6 @@ export function calcMacros({ targetCalories, weightKg, proteinPerKg = 1, fatPerK
   const carbsG = remainingKcal / 4;
   return { proteinG, fatG, carbsG };
 }
-export function waterExtraFromMinutesPerDay(minutesPerDay) {
-  const m = Math.max(0, Number(minutesPerDay || 0));
-  const extra = (m / 60) * 0.6;
-  return Number(extra.toFixed(2));
-}
-
 /** ช่วงปริมาณน้ำที่ควรดื่ม (ลิตร/วัน) จากน้ำหนักและนาทีออกกำลังกายต่อวัน */
 export function calcWaterRange(weightKg, minutesPerDay = 0) {
   const min = weightKg * 0.033;             // พื้นฐาน 33 ml/กก.

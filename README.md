@@ -1,0 +1,165 @@
+# AI-Track-Cal
+
+A Thai food calorie-tracking application. Users log meals by **photo** (a CNN identifies the Thai dish), by **voice** (speech-to-text + fuzzy food search), or by **manual entry**. The backend computes personalized calorie / macronutrient / water targets from the user's profile.
+
+This README is written to help a reviewer understand, run, and audit the project.
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|-------|------------|
+| Mobile client | Expo SDK 54, React Native 0.81, React 19, React Navigation (native-stack) |
+| API | Node.js (ESM), Express 5, `better-sqlite3` |
+| Auth | JWT (7-day) + mandatory TOTP 2FA (`otplib`), bcrypt password hashing |
+| Food image AI | Python, PyTorch, EfficientNet-B0 (50 Thai-dish classes) |
+| Speech-to-text | Python, Whisper / faster-whisper |
+| Storage | Multiple separate SQLite files (one per data domain) |
+
+---
+
+## Repository structure
+
+```
+BackEnd/
+  src/
+    server.js              # the live API server (package.json "main")
+    routes/
+      recommend.js         # /recommend  — food list, table auto-detected
+      foods.search.js      # /foods/search — in-memory Thai fuzzy index
+      stt.local.js         # /stt/local — Whisper subprocess + food match
+    services/calc.js       # BMR / TDEE / macros / water (single source of truth)
+    utils/date.js          # Thailand-local date helper
+  AI/
+    Test/infer.py          # image -> {label, confidence} (one JSON line on stdout)
+    Train/train_pt_50.py   # training script
+    Model/                 # trained weights (best_model_thfood50.pth)
+    class_map_thfood50_min.csv
+  stt/whisper_transcribe.py # audio -> {text}
+FrontEnd/
+  App.js                   # boot: notifications, then mounts navigator
+  src/
+    nav/index.js           # native-stack navigator (initial route: Login)
+    services/api.js         # axios instance + all API helpers (token via AsyncStorage)
+    services/notification.js# water-reminder scheduling
+    *.js                    # screens (Login, Home, UploadFood, History, …)
+```
+
+> **Not in the repository** (excluded for security / size): `BackEnd/.env`,
+> all `*.sqlite` database files, Python virtualenvs, and `node_modules/`.
+> A reviewer must supply these locally — see *Setup* below.
+
+---
+
+## Architecture notes
+
+- **Single live entrypoint.** `BackEnd/src/server.js` contains the entire API
+  (auth, meals, water, nutrition lookup, AI predict) and mounts the three
+  routers. There is no separate controller layer.
+- **Multi-database SQLite.** Instead of one database, the server opens separate
+  files per domain, each in WAL mode:
+  - `UserData.sqlite` — accounts, profile, TOTP secret
+  - `NutritionFromScratch.sqlite` (**NFS**) — `foods` table; the canonical
+    nutrition source used by search, recommend, STT matching, and meal auto-fill
+  - `NutritionDB.sqlite` — legacy fallback only
+  - `MealRecord.sqlite`, `WaterRecord.sqlite` — per-user logs
+  - Directory casing is probed both ways (`Database/` and `DataBase/`).
+- **Boot-time migrations.** Schema is created/migrated idempotently at server
+  start via `CREATE TABLE IF NOT EXISTS` + guarded `ALTER TABLE ADD COLUMN`
+  (driven by `PRAGMA table_info`). Old DB files missing columns are upgraded
+  in place.
+- **Auth flow.** Registration and login are two-step: credentials first, then
+  a TOTP code, before any 7-day JWT is issued. Password reset is also gated by
+  TOTP through staged short-lived tokens.
+- **Nutrition math** (`services/calc.js`): Mifflin–St Jeor BMR → TDEE via an
+  activity factor snapped to `[1.2, 1.375, 1.55, 1.725, 1.9]` → ±300 kcal for
+  lose/gain → macros (protein/fat per kg, carbs = remainder). Water target =
+  `weight·0.033 L` + `0.2 L` per 30 min/day of exercise.
+- **Python is invoked as a subprocess** (`spawn`/`spawnSync`). The Python
+  scripts communicate **only via a single JSON line on stdout** — any stray
+  print breaks the Node-side `JSON.parse`.
+
+---
+
+## Setup
+
+### Prerequisites
+- Node.js 18+
+- Python 3.10+ with the inference / STT dependencies installed (PyTorch,
+  torchvision, Pillow; `whisper` or `faster-whisper`). The project expects
+  prebuilt virtualenvs under `BackEnd/AI/`.
+- The SQLite database files (not committed). At minimum a populated
+  `NutritionFromScratch.sqlite` is required for search / recommend / STT.
+  `server.js` will create the empty user/meal/water databases on first run.
+
+### Backend
+```bash
+cd BackEnd
+npm install
+# create BackEnd/.env (see below), place .sqlite files under BackEnd/DataBase/
+npm run dev      # nodemon + watch
+# or: npm start
+```
+
+`BackEnd/.env`:
+```
+PORT=5000
+JWT_SECRET=<a long random string>
+PYTHON_EXEC=<path to the python interpreter with the AI/STT deps>
+USER_DB=DataBase/UserData.sqlite
+```
+
+### Frontend
+```bash
+cd FrontEnd
+npm install
+npm start        # Expo; or: npm run android / npm run web
+```
+
+The API base URL is read from `app.json` → `expo.extra.API_URL`
+(default `http://10.0.2.2:5000`, i.e. the Android emulator). For a physical
+device or web, set it to the machine's LAN IP.
+
+There is **no automated test suite or linter**. Verification is manual:
+server boot logs, endpoint responses (with a real `Bearer` token), the
+`/healthz` and `/__debug/*` routes, and running the Python scripts directly
+against samples in `AI/Pic-test/` and `stt/sample/`.
+
+---
+
+## Code review notes
+
+State of the codebase as reviewed:
+
+**Cleaned up in this branch**
+- Removed an unused parallel backend stack: `src/app.js`, `src/routes/auth.js`
+  (also had a duplicate `import` that made it fail to parse), and `src/db.js`.
+  These were never reachable from the live `server.js`.
+- Removed obsolete / broken standalone files: `src/migrate_water.js`,
+  `UploadPic/SavePic.js`.
+- Removed a stale duplicate `FrontEnd/src/services/auth.js`, dead API helpers
+  (`enableTwoFASetup`, `verifyTwoFASetup`, `checkTwoFA` — pointed at endpoints
+  the server does not expose), and an unused `calc.js` export.
+- Hardened the NFS database path resolution in `stt.local.js` to probe both
+  `Database/` and `DataBase/` casings (behavior unchanged on Windows; now also
+  correct on case-sensitive filesystems).
+
+**Known limitations / things to look at**
+- `POST /stt/local` is **not** behind the auth guard while `POST /ai/predict`
+  is. The mobile client currently calls STT without a token, so adding the
+  guard would be a breaking change — flagged, intentionally not changed.
+- The login / 2FA responses omit `exercise_minutes_per_day` although
+  `/auth/me` returns it — a minor response-shape inconsistency.
+- `AI/Test/infer.py` loads the checkpoint with a `strict=False` fallback, so a
+  class/head mismatch degrades accuracy silently instead of erroring.
+- `FrontEnd/src/VoiceFoodSearch.js` still ships a debug screen as its default
+  export; only the named `VoiceFoodButton` is used by the app. Left in place
+  because it is entangled with the in-use button and never mounted.
+
+**Security**
+- `.env` and the SQLite files are excluded from the repository going forward.
+  Note that if they were committed in earlier history, the secrets/data still
+  exist in that history on the remote; rotating `JWT_SECRET` and purging
+  history are recommended follow-ups outside this change.
+- CORS is currently `origin: '*'` — restrict to known origins for production.
