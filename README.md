@@ -128,6 +128,103 @@ against samples in `AI/Pic-test/` and `stt/sample/`.
 
 ---
 
+## Features & how to use
+
+Navigation is a single stack starting at **Login**. After authentication the
+app lands on **Home**, which has a bottom menu: Home · Recommend · History ·
+Profile · Settings.
+
+### 1. Sign up + 2FA enrolment
+*Screens:* Register → Setup2FA. *Endpoints:* `POST /auth/register` →
+`POST /auth/register/verify-2fa`.
+1. On Login, tap **สมัครสมาชิก** (Sign up).
+2. Fill display name, email, password, sex, weight, height, age, activity
+   level, average exercise minutes/day, and goal (maintain / lose / gain).
+3. Submit. The server creates the account and returns a TOTP QR code.
+4. On Setup2FA, scan the QR with Google Authenticator (or similar) and enter
+   the 6-digit code. On success a 7-day JWT is issued and you land on Home.
+
+### 2. Login
+*Screens:* Login → (TwoFA if 2FA on). *Endpoints:* `POST /auth/login` →
+`POST /auth/2fa/check`.
+1. Enter email + password, tap **เข้าสู่ระบบ**.
+2. If 2FA is enabled, enter the 6-digit Authenticator code on the TwoFA
+   screen. The token + `userId`/`userEmail` are stored in `AsyncStorage`.
+
+### 3. Forgot / reset password (TOTP-gated)
+*Screens:* ForgotPassword → VerifyResetOTP → ResetPassword.
+*Endpoints:* `POST /auth/reset/request` → `/auth/reset/verify-otp` →
+`/auth/reset/confirm`.
+1. From Login tap **ลืมรหัสผ่าน?**, enter the account email.
+2. Enter the current 6-digit TOTP code from the Authenticator app.
+3. Set and confirm the new password.
+
+### 4. Home dashboard
+*Endpoints:* `GET /auth/me/nutrition`, `GET /meals`, `GET /water`,
+`GET /auth/me/water`.
+- Shows today's consumed vs. target calories, a 3-ring macro chart
+  (protein / fat / carbs vs. target), per-meal-type totals, and a water
+  tracker. Meals are kept in a local SQLite mirror and reconciled with the
+  server on focus / app-resume / pull-to-refresh.
+
+### 5. Log a meal by photo (AI)
+*Screen:* UploadFood. *Endpoints:* `POST /ai/predict`,
+`GET /foods/by-name-legacy`, `POST /nfs/foods/upsert`, `POST /meals`.
+1. On Home, tap **+ เพิ่ม** on a meal type (breakfast / lunch / dinner / other).
+2. Take a photo, pick from gallery, or pick from Drive.
+3. Tap **วิเคราะห์ด้วย AI**. The dish name + confidence come back and
+   nutrition fields auto-fill from the database.
+4. Adjust quantity (g) / kcal / macros if needed, tap **บันทึก**.
+
+### 6. Log a meal by voice
+*Component:* VoiceFoodButton (inside UploadFood). *Endpoints:*
+`POST /stt/local`, `GET /foods/search`.
+1. In UploadFood tap the microphone, speak the dish name in Thai, tap again
+   to stop.
+2. The audio is transcribed and matched; pick one of the top candidates to
+   fill the nutrition fields, then save.
+
+### 7. Log a meal manually
+*Screen:* UploadFood. Type the dish name, quantity and macros directly in the
+form and tap **บันทึก** (no photo / voice required).
+
+### 8. Recommended foods
+*Screen:* Recommend. *Endpoints:* `GET /recommend`, `GET /nutrition`,
+`POST /meals`.
+1. Open **Recommend** from the bottom menu; browse or search the food list.
+2. Tap **เพิ่ม** on an item, choose a meal type in the dialog — it is logged
+   for today. The screen also shows your top foods of the day.
+
+### 9. History
+*Screen:* History. *Endpoints:* `GET /meals`, `DELETE /meals/:id`,
+`GET /water`, `GET /auth/me/water`.
+1. Open **History**; pick a date on the calendar to load that day's meals
+   and water.
+2. Tap the trash icon on an entry to delete it (removed on server + local
+   mirror).
+
+### 10. Weekly summary
+*Screen:* WeeklySummary (via History → **ดูสรุปทั้งหมด**). *Endpoints:*
+`GET /meals` (Mon–Sun), `GET /auth/me/nutrition`. Shows 7-day total energy
+vs. target and a per-day breakdown with over/under status.
+
+### 11. Profile & edit
+*Screens:* Profile → EditProfile. *Endpoints:* `GET /auth/me`,
+`PUT /auth/me`. View weight/height/age/sex/activity/goal; tap
+**แก้ไขข้อมูล** to update. Changing weight or exercise minutes updates the
+calorie/water targets used everywhere.
+
+### 12. Settings — water reminder
+*Screen:* Settings. Schedules repeating water-reminder notifications; when
+the daily glass goal (derived from `GET /auth/me/water`) is reached, reminders
+auto-cancel. On Expo Go a mock interval is used instead of OS notifications.
+
+### 13. Water intake logging
+On Home, tap the glass icons to set how many glasses you've had today (or
+**reset to 0**). *Endpoint:* `PUT /water` (250 ml/glass).
+
+---
+
 ## Code review notes
 
 State of the codebase as reviewed:
@@ -156,6 +253,10 @@ State of the codebase as reviewed:
 - `FrontEnd/src/VoiceFoodSearch.js` still ships a debug screen as its default
   export; only the named `VoiceFoodButton` is used by the app. Left in place
   because it is entangled with the in-use button and never mounted.
+- `Profile.js` reads `AsyncStorage.getItem("token")` (the app stores the JWT
+  under `accessToken`) and passes it as an explicit header. It works only
+  because the axios interceptor re-injects the correct token; the explicit
+  header / key is dead and misleading.
 
 **Security**
 - `.env` and the SQLite files are excluded from the repository going forward.
