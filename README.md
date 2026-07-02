@@ -6,6 +6,17 @@ This README is written to help a reviewer understand, run, and audit the project
 
 ---
 
+## Objectives
+
+1. **2.1** — Build a mobile application that lets users add food items by photo
+   or by voice, and automatically estimate calories and nutrients.
+2. **2.2** — Apply AI techniques (Deep Learning, food recognition) to analyze
+   and classify Thai dishes.
+3. **2.3** — Promote effective diet control, nutrition planning, and health
+   tracking for users.
+
+---
+
 ## Tech stack
 
 | Layer | Technology |
@@ -16,6 +27,53 @@ This README is written to help a reviewer understand, run, and audit the project
 | Food image AI | Python, PyTorch, EfficientNet-B0 (50 Thai-dish classes) |
 | Speech-to-text | Python, Whisper / faster-whisper |
 | Storage | Multiple separate SQLite files (one per data domain) |
+
+---
+
+## Food image model (trained in-house)
+
+The Thai-dish classifier is **trained by us**, not an off-the-shelf pretrained
+classifier — we fine-tuned an ImageNet backbone on a Thai food dataset.
+
+| Item | Detail |
+|------|--------|
+| Architecture | **EfficientNet-B0** (`torchvision`), ImageNet-pretrained backbone with the final classifier head replaced by a 50-class head |
+| Task | Single-label classification of 50 Thai dishes (**THFOOD-50**, classes 50–99) |
+| Dataset | **THFOOD-50** — 50 Thai food categories, **30,460 images** total, **stratified** split into Train **22,331** (73.31%) / Validation **8,129** (26.69%) |
+| Training | Two-stage transfer learning: Stage 1 freezes the backbone and trains only the head; Stage 2 unfreezes ~70% of the backbone and fine-tunes at a lower LR |
+| Recipe | AdamW, mixed-precision (AMP), label smoothing 0.05, `ReduceLROnPlateau`, early stopping (patience = 10); data augmentation (flip, rotation, color jitter, random-resized crop); 224×224 input, ImageNet normalization |
+| Artifacts | Weights `AI/Model/best_model_thfood50.pth`; class map `AI/class_map_thfood50_min.csv` |
+| Scripts | Train: `AI/Train/train_pt_50.py` · Inference: `AI/Test/infer.py` |
+
+### Training results (Stage 2 — fine-tuning)
+
+Best checkpoint reached at **Stage 2, epoch 46 / 60** (max), then **early
+stopping** triggered after validation accuracy failed to improve for
+`patience = 10` epochs.
+
+| Metric | Value |
+|--------|-------|
+| Train accuracy | **0.9984** (≈ 99.84%) |
+| Validation accuracy | **0.9556** (≈ 95.56%) |
+| Best validation accuracy | **0.9558** (≈ 95.58%) |
+| Validation loss | **0.5563** |
+
+The gap between train (~99.8%) and validation (~95.6%) accuracy — with a low,
+stable validation loss — indicates the model generalizes well without severe
+overfitting. The fine-tuned EfficientNet-B0 classifies Thai dishes with ~95.6%
+average validation accuracy: accurate and stable.
+
+### Inference pipeline
+
+When a user submits a photo, `AI/Test/infer.py` runs:
+
+1. **Preprocessing** — resize to 224×224, normalize with ImageNet mean/std.
+2. **Prediction** — the model produces per-class **logits**.
+3. **Softmax** — logits are converted to a probability distribution (sums to 1).
+4. **Top-K selection** — the **Top-5** classes are returned, with the rank-1
+   class taken as the primary prediction (`{label, confidence}`).
+5. **Nutrition lookup** — the predicted dish is joined against the nutrition
+   database to surface energy (kcal), protein, fat, and carbohydrate.
 
 ---
 
